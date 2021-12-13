@@ -1,0 +1,16 @@
+version: "3.9"
+services:
+  app_prod:
+    image: 094944678802.dkr.ecr.us-east-1.amazonaws.com/app_prod:1.0
+    deploy:
+      restart_policy:
+        condition: on-failure
+  nginx_prod:
+    image: 094944678802.dkr.ecr.us-east-1.amazonaws.com/nginx:1.0
+    deploy:
+      restart_policy:
+        condition: on-failure
+    ports:
+      - "8600:80"
+    depends_on:
+      - app_prod

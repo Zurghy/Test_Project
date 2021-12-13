@@ -1,0 +1,12 @@
+FROM tiangolo/uwsgi-nginx-flask:python3.8
+
+WORKDIR /app
+
+ADD minimal-flask-example/ /app/
+
+RUN python -m pip install --upgrade pip && \
+    pip install -r requirements.txt
+
+ENTRYPOINT ["python"]
+
+CMD [ "wsgi.py" ]
