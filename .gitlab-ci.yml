@@ -1,0 +1,136 @@
+---
+stages:
+  - prereq
+  - build
+  - test
+  - merge
+  - deploy-test
+  - deploy-merge
+  - deploy
+
+variables:
+  #Path info
+  CONTAINER_APP_PATH: ./container_app
+  TERRAFORM_PATH: ./terraform
+  
+  #AWS info
+  AWS_ACCESS_ID: 094944678802
+  REGION: us-east-1
+
+  #Stack info
+  ## App
+  APP_NAME: app
+  APP_IMAGE_TAG: 1.0
+  APP_DEV: ${APP_NAME}_dev:${APP_IMAGE_TAG}
+  APP_PROD: ${APP_NAME}_prod:${APP_IMAGE_TAG}
+
+  ##Nginx
+  NGINX_NAME: nginx
+  NGINX_IMAGE_TAG: 1.0
+  NGINX_DEV: ${NGINX_NAME}_dev:${NGINX_IMAGE_TAG}
+  NGINX_PROD: ${NGINX_NAME}_prod:${NGINX_IMAGE_TAG}
+
+install-packages:
+  stage: prereq
+  script:
+    - pip install docker
+    - pip install docker-compose
+    - pip install testinfra 
+
+install-aws-cli-2
+  stage: prereq
+  script:
+    - curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "/tmp/awscliv2.zip"
+    - unzip /tmp/awscliv2.zip
+    - /tmp/aws/install -i /usr/local/aws-cli -b /usr/local/bin --update
+    - sudo ln -s /usr/local/bin/aws /usr/bin/aws
+    - rm -rf /tmp/awscliv2.zip /tmp/aws
+
+test-packages
+  stage: prereq
+  script:
+    - aws --version
+    - docker --version
+    - docker-compose --version
+  needs:
+    - install-packages 
+    - install-aws-cli-2
+ 
+clone-repository:
+  stage: build
+  script:
+    - git clone https://github.com/matdoering/minimal-flask-example ${CONTAINER_APP_PATH}
+
+build-dev-compose:
+  stage: build
+  script:
+    - docker-compose -f docker-compose-dev.yml --env-file .env.dev up --build
+  needs: clone-repository
+
+app-dev-test:
+  stage: test
+  script:
+    - cd ${CONTAINER_APP_PATH}/minimal-flask-example/
+    - pytest
+  needs: build-dev-compose
+
+create-terraform-env:
+  stage: merge
+  script:
+    - cd ${TERRAFORM_PATH}
+    - terraform plan
+    - terraform apply -auto-approve
+
+aws-login:
+  stage: merge
+  script:
+    - docker login -u AWS -p $(aws ecr get-login-password --region ${REGION}) ${AWS_ACCESS_ID}.dkr.ecr.${REGION}.amazonaws.com
+  needs: create-terraform-env
+
+push-dev-docker-images:
+  stage: merge
+  script:
+    #App
+    - docker tag ${APP_DEV} ${AWS_ACCESS_ID}.dkr.ecr.${REGION}.amazonaws.com/${APP_DEV}
+    - docker push ${AWS_ACCESS_ID}.dkr.ecr.${REGION}.amazonaws.com/${APP_DEV}
+    #Nginx
+    - docker tag ${NGINX_DEV} ${AWS_ACCESS_ID}.dkr.ecr.${REGION}.amazonaws.com/${NGINX_DEV}
+    - docker push ${AWS_ACCESS_ID}.dkr.ecr.${REGION}.amazonaws.com/${NGINX_DEV}
+  needs: aws-login
+
+build-prod-compose:
+  stage: deploy-test
+  script:
+    - docker-compose -f docker-compose-prod.yml --env-file .env.prod up --build
+
+app-prod-test:
+  stage: deploy-test
+  script:
+    - cd ${CONTAINER_APP_PATH}/minimal-flask-example/
+    - pytest -v --hosts http://localhost:8086
+  needs: build-prod-compose
+
+push-prod-docker-images:
+  stage: deploy-merge
+  script:
+    #App
+    - docker tag ${APP_PROD} ${AWS_ACCESS_ID}.dkr.ecr.${REGION}.amazonaws.com/${APP_PROD}
+    - docker push ${AWS_ACCESS_ID}.dkr.ecr.${REGION}.amazonaws.com/${APP_DEV}
+    #Nginx
+    - docker tag ${NGINX_PROD} ${AWS_ACCESS_ID}.dkr.ecr.${REGION}.amazonaws.com/${NGINX_PROD}
+    - docker push ${AWS_ACCESS_ID}.dkr.ecr.${REGION}.amazonaws.com/${NGINX_PROD}
+  needs: 
+    - aws-login
+    - app-prod-test
+
+swarm-init:
+  stage: deploy
+  script:
+    - docker swarm init --advertise-addr [IP della ipotetica macchina master] 
+
+swarm-deploy:
+  stage: deploy
+  script:
+    - docker stack deploy --with-registry-auth --compose-file docker-deploy-prod.yml stackapp 
+  needs:
+    - aws-login
