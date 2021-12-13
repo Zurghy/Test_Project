@@ -80,7 +80,8 @@ create-terraform-env:
     - cd ${TERRAFORM_PATH}
     - terraform plan
     - terraform apply -auto-approve
-
+  needs: app-dev-test
+  
 aws-login:
   stage: merge
   script:
